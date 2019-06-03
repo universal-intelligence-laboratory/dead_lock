@@ -25,21 +25,31 @@ class DeadConv2d(nn.Module):
             self.bias = nn.Parameter(torch.Tensor(out_channels))
         else:
             self.bias = torch.zeros(out_channels)
-        self.dead_lock = F.relu(torch.ones(out_channels)) # 用relu控制稀疏性，也可以用tempered softmax控制？
+            
+        self.dead_lock =  nn.Parameter(torch.ones(out_channels),requires_grad=False)# 用relu控制稀疏性，也可以用tempered softmax控制？
 
     def forward(self, input):
+        # 普通卷积
         output_inner = F.conv2d(input, self.weights, self.bias, 1,
                         self.padding, self.dilation, self.groups)
         
         
-        output_dead = F.conv2d(output_inner, self.weights_1x1, self.dead_lock, 1,
-                        0, 1,1)# 这样好像控制不了，必须往更深层深度定制，直接在conv的bias后面加一层可以控制何时死亡，稀疏性的bias
+        # 很简单，每个通道的结果乘以一个scalar，初始为1，并且可以控制在何时启动
+        for i in range(self.out_channels):
+            output_inner[:,i,:,:] *= F.relu(self.dead_lock[i])
         
-        
-        return output_dead
+        return output_inner
 
-conv = DeadConv2d(in_channels = 3, out_channels = 3, kernel_size=[3,3])
-a = Variable(torch.ones([1,3,10,10]), requires_grad=True)
-b = torch.mean(conv(torch.mean(conv(a)) * conv(a)))
-b.backward()
-print(a.grad)
+
+# 展示使用
+conv = DeadConv2d(in_channels = 3, out_channels = 7, kernel_size=[3,3])
+a = Variable(torch.ones([11,3,10,10]), requires_grad=True)
+b = torch.mean(conv(a))
+
+
+# 展示死亡权重冻结
+for i in range(10):
+    print(conv.dead_lock.requires_grad)
+    conv.dead_lock.requires_grad = not conv.dead_lock.requires_grad
+    b.backward(retain_graph=True)
+    print(a.grad)
